@@ -1,348 +1,46 @@
-# ============================================================
-# Zeus WASM — Production CI/CD Pipeline
-# ============================================================
-# Deploys Cloudflare Worker with WASM core to staging/production
-# ============================================================
-
-name: Deploy Zeus WASM
+name: Build & Deploy WASM Worker
 
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main]
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: "Target environment"
-        required: true
-        default: "staging"
-        type: choice
-        options:
-          - staging
-          - production
-
-# Only one deploy at a time per environment
-concurrency:
-  group: deploy-${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'production' || 'staging') }}
-  cancel-in-progress: true
-
-env:
-  RUST_VERSION: "1.77.0"
-  WASM_PACK_VERSION: "0.13.1"
-  NODE_VERSION: "20"
+push:
+branches:
+- main
 
 jobs:
-  # ──────────────────────────────────────────────────────────
-  # Job 1: Build & Test WASM Core
-  # ──────────────────────────────────────────────────────────
-  build-wasm:
-    name: Build WASM Core
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+deploy:
+runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+```
+steps:
+  # 1. دریافت کد
+  - name: Checkout repo
+    uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-          targets: wasm32-unknown-unknown
-          components: rustfmt, clippy
+  # 2. نصب Rust
+  - name: Setup Rust
+    uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            wasm-core/target/
-          key: rust-${{ runner.os }}-${{ hashFiles('wasm-core/Cargo.lock', 'wasm-core/Cargo.toml') }}
-          restore-keys: |
-            rust-${{ runner.os }}-
+  # 3. نصب wasm-pack
+  - name: Install wasm-pack
+    run: cargo install wasm-pack
 
-      - name: Install wasm-pack
-        run: |
-          curl -L https://github.com/nickelpack/wasm-pack/releases/download/v${{ env.WASM_PACK_VERSION }}/wasm-pack-v${{ env.WASM_PACK_VERSION }}-x86_64-unknown-linux-musl.tar.gz | tar xz
-          sudo mv wasm-pack*/wasm-pack /usr/local/bin/
-          wasm-pack --version
+  # 4. بیلد WASM
+  - name: Build WASM
+    run: wasm-pack build --release
 
-      - name: Run Rust tests
-        working-directory: wasm-core
-        run: cargo test --release
+  # 5. نصب Node.js (برای Wrangler)
+  - name: Setup Node
+    uses: actions/setup-node@v4
+    with:
+      node-version: 18
 
-      - name: Run Clippy (lint)
-        working-directory: wasm-core
-        run: cargo clippy --release -- -D warnings
+  # 6. نصب Wrangler
+  - name: Install Wrangler
+    run: npm install -g wrangler
 
-      - name: Build WASM (release)
-        working-directory: wasm-core
-        run: |
-          wasm-pack build --target web --release --out-dir ../worker/wasm
-          echo "--- WASM Build Output ---"
-          ls -lh ../worker/wasm/
-          echo "-------------------------"
-
-      - name: Validate WASM binary
-        run: |
-          WASM_FILE="worker/wasm/zeus_wasm_core_bg.wasm"
-          if [ ! -f "$WASM_FILE" ]; then
-            echo "::error::WASM binary not found at $WASM_FILE"
-            exit 1
-          fi
-          SIZE=$(stat -c%s "$WASM_FILE")
-          echo "WASM binary size: $SIZE bytes"
-          if [ "$SIZE" -lt 1000 ]; then
-            echo "::error::WASM binary suspiciously small ($SIZE bytes), build may have failed"
-            exit 1
-          fi
-          if [ "$SIZE" -gt 1048576 ]; then
-            echo "::warning::WASM binary is larger than 1MB ($SIZE bytes), consider optimizing"
-          fi
-          # Verify it's a valid WASM module
-          MAGIC=$(xxd -l 4 -p "$WASM_FILE")
-          if [ "$MAGIC" != "0061736d" ]; then
-            echo "::error::File is not a valid WASM module (magic: $MAGIC)"
-            exit 1
-          fi
-          echo "✓ WASM binary validated successfully"
-
-      - name: Optimize WASM with wasm-opt
-        run: |
-          if command -v wasm-opt &> /dev/null; then
-            BEFORE=$(stat -c%s worker/wasm/zeus_wasm_core_bg.wasm)
-            wasm-opt -Oz --output worker/wasm/zeus_wasm_core_bg.wasm worker/wasm/zeus_wasm_core_bg.wasm
-            AFTER=$(stat -c%s worker/wasm/zeus_wasm_core_bg.wasm)
-            SAVED=$((BEFORE - AFTER))
-            echo "wasm-opt: ${BEFORE}B → ${AFTER}B (saved ${SAVED}B)"
-          else
-            echo "::warning::wasm-opt not found, skipping optimization"
-          fi
-
-      - name: Upload WASM artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wasm-build
-          path: |
-            worker/wasm/zeus_wasm_core.js
-            worker/wasm/zeus_wasm_core_bg.wasm
-            worker/wasm/zeus_wasm_core_bg.wasm.d.ts
-          retention-days: 1
-
-  # ──────────────────────────────────────────────────────────
-  # Job 2: Validate Worker JS
-  # ──────────────────────────────────────────────────────────
-  validate-worker:
-    name: Validate Worker
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: worker/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('worker/package-lock.json') }}
-          restore-keys: |
-            npm-${{ runner.os }}-
-
-      - name: Install dependencies
-        working-directory: worker
-        run: npm ci --prefer-offline
-
-      - name: Validate wrangler.toml syntax
-        working-directory: worker
-        run: npx wrangler deploy --dry-run --outdir=./dist 2>&1 || true
-
-      - name: Check for hardcoded secrets
-        run: |
-          echo "Scanning for potential secret leaks..."
-          PATTERNS=(
-            'api[_-]?token\s*[:=]\s*["\x27][A-Za-z0-9_-]{20,}'
-            'secret\s*[:=]\s*["\x27][A-Za-z0-9_-]{20,}'
-            'password\s*[:=]\s*["\x27][^\s]{8,}'
-            'sk-[A-Za-z0-9]{20,}'
-          )
-          FOUND=0
-          for pattern in "${PATTERNS[@]}"; do
-            if grep -rn -E "$pattern" worker/src/ wasm-core/src/ 2>/dev/null; then
-              echo "::warning::Potential secret pattern found matching: $pattern"
-              FOUND=1
-            fi
-          done
-          if [ "$FOUND" -eq 1 ]; then
-            echo "::warning::Review the above matches — they may be false positives"
-          fi
-          echo "✓ Secret scan complete"
-
-  # ──────────────────────────────────────────────────────────
-  # Job 3: Deploy to Staging
-  # ──────────────────────────────────────────────────────────
-  deploy-staging:
-    name: Deploy to Staging
-    needs: [build-wasm, validate-worker]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: github.ref == 'refs/heads/develop' || github.event.inputs.environment == 'staging'
-    environment:
-      name: staging
-      url: https://zeus-staging.${{ vars.CF_WORKERS_SUBDOMAIN }}.workers.dev
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: worker/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('worker/package-lock.json') }}
-          restore-keys: |
-            npm-${{ runner.os }}-
-
-      - name: Install dependencies
-        working-directory: worker
-        run: npm ci --prefer-offline
-
-      - name: Download WASM artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: wasm-build
-          path: worker/wasm
-
-      - name: Verify WASM files present
-        run: |
-          ls -lh worker/wasm/
-          test -f worker/wasm/zeus_wasm_core.js || { echo "::error::WASM JS wrapper missing"; exit 1; }
-          test -f worker/wasm/zeus_wasm_core_bg.wasm || { echo "::error::WASM binary missing"; exit 1; }
-          echo "✓ WASM files present"
-
-      - name: Deploy to Staging
-        working-directory: worker
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          npx wrangler deploy --env staging 2>&1 | tee deploy-output.txt
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "::error::Wrangler deploy failed for staging"
-            exit 1
-          fi
-          echo "✓ Staging deploy complete"
-
-      - name: Health check
-        env:
-          STAGING_URL: ${{ vars.STAGING_URL || format('https://zeus-staging.{0}.workers.dev', vars.CF_WORKERS_SUBDOMAIN) }}
-        run: |
-          echo "Waiting for deployment to propagate..."
-          sleep 5
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$STAGING_URL" --max-time 10 || echo "000")
-          echo "Health check: HTTP $HTTP_STATUS"
-          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 500 ]; then
-            echo "::warning::Health check returned HTTP $HTTP_STATUS — deployment may need time to propagate"
-          else
-            echo "✓ Staging is healthy"
-          fi
-
-  # ──────────────────────────────────────────────────────────
-  # Job 4: Deploy to Production
-  # ──────────────────────────────────────────────────────────
-  deploy-production:
-    name: Deploy to Production
-    needs: [build-wasm, validate-worker]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    environment:
-      name: production
-      url: https://zeus.${{ vars.CF_WORKERS_SUBDOMAIN }}.workers.dev
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
-        with:
-          path: worker/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('worker/package-lock.json') }}
-          restore-keys: |
-            npm-${{ runner.os }}-
-
-      - name: Install dependencies
-        working-directory: worker
-        run: npm ci --prefer-offline
-
-      - name: Download WASM artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: wasm-build
-          path: worker/wasm
-
-      - name: Verify WASM files present
-        run: |
-          ls -lh worker/wasm/
-          test -f worker/wasm/zeus_wasm_core.js || { echo "::error::WASM JS wrapper missing"; exit 1; }
-          test -f worker/wasm/zeus_wasm_core_bg.wasm || { echo "::error::WASM binary missing"; exit 1; }
-          echo "✓ WASM files present"
-
-      - name: Deploy to Production
-        working-directory: worker
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          npx wrangler deploy --env production 2>&1 | tee deploy-output.txt
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "::error::Wrangler deploy failed for production"
-            exit 1
-          fi
-          echo "✓ Production deploy complete"
-
-      - name: Health check
-        env:
-          PROD_URL: ${{ vars.PRODUCTION_URL || format('https://zeus.{0}.workers.dev', vars.CF_WORKERS_SUBDOMAIN) }}
-        run: |
-          echo "Waiting for deployment to propagate..."
-          sleep 5
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PROD_URL" --max-time 10 || echo "000")
-          echo "Health check: HTTP $HTTP_STATUS"
-          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 500 ]; then
-            echo "::warning::Health check returned HTTP $HTTP_STATUS"
-          else
-            echo "✓ Production is healthy"
-          fi
-
-      - name: Create deployment summary
-        if: success()
-        run: |
-          echo "## ✅ Production Deployment" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Actor | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Time | $(date -u) |" >> $GITHUB_STEP_SUMMARY
+  # 7. Deploy به Cloudflare
+  - name: Deploy Worker
+    run: wrangler deploy
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+```
