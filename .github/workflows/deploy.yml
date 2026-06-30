@@ -1,4 +1,4 @@
-name: Build & Deploy Zwsam (WASM Worker)
+name: Deploy WASM Worker
 
 on:
 push:
@@ -11,39 +11,25 @@ runs-on: ubuntu-latest
 
 ```
 steps:
-  # 1. دریافت کد
-  - name: Checkout repository
+  - name: Checkout code
     uses: actions/checkout@v4
 
-  # 2. نصب Rust
   - name: Setup Rust
     uses: dtolnay/rust-toolchain@stable
 
-  # 3. نصب wasm-pack
   - name: Install wasm-pack
     run: cargo install wasm-pack
 
-  # 4. Build پروژه WASM
-  - name: Build WASM package
+  - name: Build WASM
     run: wasm-pack build --release
 
-  # 5. بررسی اینکه pkg ساخته شده
-  - name: Verify build output
-    run: ls -la pkg
-
-  # 6. نصب Node
   - name: Setup Node.js
     uses: actions/setup-node@v4
     with:
       node-version: 18
 
-  # 7. نصب Wrangler جدید
-  - name: Install Wrangler
-    run: npm install -g wrangler@4
-
-  # 8. Deploy به Cloudflare
-  - name: Deploy Worker
-    run: wrangler deploy
+  - name: Deploy to Cloudflare
+    run: npx wrangler@4 deploy
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
