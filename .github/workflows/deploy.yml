@@ -23,12 +23,12 @@ steps:
   - name: Build WASM
     run: wasm-pack build --release
 
-  - name: Setup Node.js
+  - name: Setup Node
     uses: actions/setup-node@v4
     with:
       node-version: 18
 
-  - name: Deploy to Cloudflare
+  - name: Deploy
     run: npx wrangler@4 deploy
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
