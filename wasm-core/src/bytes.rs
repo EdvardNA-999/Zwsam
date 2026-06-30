@@ -1,7 +1,7 @@
 //! Byte manipulation utilities for WASM ↔ JS interop
 
 use js_sys::Array;
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 
 /// Concatenate multiple Uint8Arrays from a JS Array into a single Vec<u8>.
 /// Each element should be a Uint8Array or ArrayBuffer.
