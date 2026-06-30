@@ -1,0 +1,18 @@
+{
+  "name": "zeus-wasm-worker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy --env production",
+    "build:wasm": "cd ../wasm-core && wasm-pack build --target web --release --out-dir ../worker/wasm",
+    "build:wasm:dev": "cd ../wasm-core && wasm-pack build --target web --dev --out-dir ../worker/wasm",
+    "validate": "node scripts/validate.js",
+    "typecheck": "tsc --noEmit src/index.js --allowJs --checkJs"
+  },
+  "devDependencies": {
+    "wrangler": "^3.99.0"
+  }
+}
