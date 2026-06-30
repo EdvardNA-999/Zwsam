@@ -22,8 +22,8 @@ fallthrough = true
 [[d1_databases]]
 binding = "DB"
 database_name = "zeus-db"
-database_id = "YOUR_D1_DATABASE_ID"
-preview_database_id = "YOUR_PREVIEW_D1_DATABASE_ID"
+database_id = "e40b3fde-419c-4666-934d-e61b52aa4831"
+preview_database_id = "e40b3fde-419c-4666-934d-e61b52aa4831"
 
 # ─────────────────────────────────────────────────────────────
 # Staging Environment
