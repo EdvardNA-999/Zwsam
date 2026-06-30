@@ -2,7 +2,7 @@
 name = "zeus-wasm-core"
 version = "1.0.0"
 edition = "2021"
-description = "High-performance WASM core for Zeus VLESS proxy"
+description = "High-performance WASM core for Zeus "
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -32,4 +32,4 @@ strip = true
 panic = "abort"
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-O", "--enable-bulk-memory"]
+wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
